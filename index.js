@@ -1,5 +1,6 @@
 import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
+import qrcode from 'qrcode';
 import express from 'express';
 import multer from 'multer';
 import initSqlJs from 'sql.js';
@@ -281,6 +282,16 @@ async function startBot() {
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
+    if (qr && !state.creds?.registered) {
+      try {
+        const qrText = await qrcode.toString(qr, { type: 'terminal', small: true });
+        console.log('\n══════ QR CODE — Scan with WhatsApp Desktop ══════');
+        console.log(qrText);
+        console.log('════════════════════════════════════════════════\n');
+      } catch (e) {
+        console.log('[!] QR render failed:', e.message);
+      }
+    }
     if (connection === 'open') {
       console.log(`[+] Connected as ${sock.user?.id}`);
       if (!state.creds?.registered) {
