@@ -271,8 +271,9 @@ async function startBot() {
     }
     if (connection === 'open') {
       console.log(`[+] Connected as ${sock.user?.id}`);
-      if (alertJid) {
-        try { await sock.sendMessage(alertJid, { text: '✅ *Phantom C2 bot online*\nSend `!menu` to start.' }); } catch {}
+      const targetJid = alertJid || (process.env.PHONE_NUMBER ? `${process.env.PHONE_NUMBER.replace(/\D/g, '')}@s.whatsapp.net` : null);
+      if (targetJid) {
+        try { await sock.sendMessage(targetJid, { text: '✅ *Phantom C2 bot online*\nSend `!menu` to start.' }); } catch (e) { console.error('[!] online alert failed:', e.message); }
       }
     }
     if (connection === 'close') {
