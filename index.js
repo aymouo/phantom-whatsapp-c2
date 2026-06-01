@@ -212,6 +212,7 @@ async function forwardToDevice(ctx) {
 // ── WhatsApp Bot ───────────────────────────────────────────
 let sock = null;
 let alertJid = null;
+let qrPng = null;
 
 async function startBot() {
   // Reset auth if FRESH=true (MUST be before useMultiFileAuthState)
@@ -284,10 +285,14 @@ async function startBot() {
     const { connection, lastDisconnect, qr } = update;
     if (qr && !state.creds?.registered) {
       try {
-        const qrText = await qrcode.toString(qr, { type: 'terminal', small: true });
-        console.log(`\n══════ QR CODE — Scan with WhatsApp Desktop ══════\n${qrText}\n════════════════════════════════════════════════\n`);
+        // Show small ASCII QR in logs
+        const qrOpts = { errorCorrectionLevel: 'L' };
+        const qrSmall = await qrcode.toString(qr, { ...qrOpts, type: 'terminal', small: true });
+        console.log(`\n══ QR CODE — Scan with WhatsApp phone ══\n${qrSmall}\n═══════════════════════════════════════\n`);
+        // Also generate PNG for /qr.png endpoint
+        qrPng = await qrcode.toBuffer(qr, { ...qrOpts, type: 'png', width: 256, margin: 2 });
       } catch (e) {
-        console.log('[!] QR render failed:', e.message);
+        console.log('[!] QR error:', e.message);
       }
     }
     if (connection === 'open') {
@@ -446,6 +451,12 @@ app.get('/health', (req, res) => {
 app.get('/logs', (req, res) => {
   res.set('Content-Type', 'text/plain');
   res.send(logBuffer.join('\n'));
+});
+
+app.get('/qr.png', (req, res) => {
+  if (!qrPng) return res.status(404).send('No QR yet');
+  res.set('Content-Type', 'image/png');
+  res.send(qrPng);
 });
 
 app.get('/api/poll', requireApiKey, (req, res) => {
