@@ -294,7 +294,6 @@ async function startBot() {
   sock.ev.on('messages.upsert', async ({ messages }) => {
     try {
     for (const msg of messages) {
-      if (msg.key?.fromMe) continue;
       const jid = msg.key.remoteJid;
       const isGroup = jid.endsWith('@g.us');
 
