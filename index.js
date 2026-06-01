@@ -291,10 +291,15 @@ async function startBot() {
 
   sock.ev.on('creds.update', saveCreds);
 
-  sock.ev.on('messages.upsert', async ({ messages }) => {
+  sock.ev.on('messages.upsert', async ({ messages, type }) => {
     try {
+    console.log(`[debug] messages.upsert type=${type} count=${messages.length}`);
     for (const msg of messages) {
       const jid = msg.key.remoteJid;
+      const msgText = msg.message?.conversation || msg.message?.extendedTextMessage?.text || '';
+      const fromMe = msg.key?.fromMe;
+      if (msgText) console.log(`[debug] msg fromMe=${fromMe} jid=${jid} text="${msgText.slice(0,60)}"`);
+      else if (msg.message?.listResponseMessage) console.log(`[debug] list response fromMe=${fromMe} jid=${jid} rowId=${msg.message?.listResponseMessage?.singleSelectReply?.selectedRowId}`);
       const isGroup = jid.endsWith('@g.us');
 
       if (OWNER_JID && jid !== OWNER_JID && !(GROUP_MODE && isGroup)) continue;
