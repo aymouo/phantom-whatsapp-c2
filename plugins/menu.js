@@ -87,6 +87,14 @@ export default {
           ]
         },
         {
+          title: '🔐 SECURITY',
+          rows: [
+            { title: '🔒 Encrypt Text', description: 'Encrypt a command for stealth C2', rowId: 'encrypt_help' },
+            { title: '🔓 Decrypt Response', description: 'Decrypt a C2 response inline', rowId: 'd_help' },
+            { title: '💾 Save Auth Backup', description: 'Backup WhatsApp auth to env var', rowId: 'saveauth' },
+          ]
+        },
+        {
           title: '⚙️ MANAGEMENT',
           rows: [
             { title: '📱 Devices', description: 'List all registered devices', rowId: 'devices' },

