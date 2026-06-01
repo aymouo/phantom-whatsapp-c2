@@ -126,7 +126,6 @@ async function startBot() {
   sock = makeWASocket({
     version,
     logger: pino({ level: 'warn' }),
-    printQRInTerminal: true,
     auth: state,
     syncFullHistory: false,
     markOnlineOnConnect: true,
@@ -135,7 +134,21 @@ async function startBot() {
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
-    if (qr) console.log('[+] QR/received. Scan or use pairing code.');
+    if (qr) {
+      console.log('[+] QR received. Generating pairing code...');
+      if (process.env.PHONE_NUMBER) {
+        try {
+          const code = await sock.requestPairingCode(process.env.PHONE_NUMBER);
+          console.log(`\n═══════════════════════════════════════`);
+          console.log(`  PAIRING CODE: ${code}`);
+          console.log(`  Open WhatsApp → Linked Devices → Link a Device`);
+          console.log(`  Enter: ${code}`);
+          console.log(`═══════════════════════════════════════\n`);
+        } catch (e) {
+          console.log('[!] Pairing code failed:', e.message);
+        }
+      }
+    }
     if (connection === 'open') {
       console.log(`[+] Connected as ${sock.user?.id}`);
       if (alertJid) {
