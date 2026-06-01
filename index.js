@@ -250,22 +250,22 @@ async function startBot() {
       const customCode = process.env.PAIRING_CODE || undefined;
       const code = await sock.requestPairingCode(phone, customCode);
       const hyphenated = code.length === 8 ? `${code.slice(0,4)}-${code.slice(4)}` : code;
-      console.log(`\n═══════════════════════════════════════════════════`);
-      console.log(`  PHONE NUMBER: ${phone}`);
-      console.log(`  PAIRING CODE: ${code}`);
-      console.log(`  With hyphen:  ${hyphenated}`);
-      console.log(`  ───────────────────────────────────────────────`);
-      console.log(`  1. Open WhatsApp Desktop`);
-      console.log(`  2. Settings → Linked Devices → Link a Device`);
-      console.log(`  3. Enter the code ABOVE (letters are UPPERCASE)`);
-      console.log(`  4. Code expires in ~2 minutes`);
-      console.log(`  ───────────────────────────────────────────────`);
-      console.log(`  If it fails, check:`);
-      console.log(`  - PHONE_NUMBER has COUNTRY CODE (e.g. 212 for Morocco)`);
-      console.log(`  - No +, spaces, or dashes in PHONE_NUMBER`);
-      console.log(`  - Set FRESH=true env var to wipe old auth`);
-      console.log(`  - Set PAIRING_CODE=ABCD1234 for a fixed 8-char code`);
-      console.log(`═══════════════════════════════════════════════════\n`);
+      console.log(`\n═══════════════════════════════════════════════════
+  PHONE NUMBER: ${phone}
+  PAIRING CODE: ${code}
+  With hyphen:  ${hyphenated}
+  ───────────────────────────────────────────────
+  1. Open WhatsApp Desktop
+  2. Settings → Linked Devices → Link a Device
+  3. Enter the code ABOVE (letters are UPPERCASE)
+  4. Code expires in ~2 minutes
+  ───────────────────────────────────────────────
+  If it fails, check:
+  - PHONE_NUMBER has COUNTRY CODE (e.g. 212 for Morocco)
+  - No +, spaces, or dashes in PHONE_NUMBER
+  - Set FRESH=true env var to wipe old auth
+  - Set PAIRING_CODE=ABCD1234 for a fixed 8-char code
+═══════════════════════════════════════════════════\n`);
     } catch (e) {
       console.log('[!] Pairing code failed:', e.message);
       console.log('    Check PHONE_NUMBER format. Digits only, with country code.');
@@ -285,9 +285,7 @@ async function startBot() {
     if (qr && !state.creds?.registered) {
       try {
         const qrText = await qrcode.toString(qr, { type: 'terminal', small: true });
-        console.log('\n══════ QR CODE — Scan with WhatsApp Desktop ══════');
-        console.log(qrText);
-        console.log('════════════════════════════════════════════════\n');
+        console.log(`\n══════ QR CODE — Scan with WhatsApp Desktop ══════\n${qrText}\n════════════════════════════════════════════════\n`);
       } catch (e) {
         console.log('[!] QR render failed:', e.message);
       }
