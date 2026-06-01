@@ -12,6 +12,11 @@ import os from 'os';
 dotenv.config();
 
 const PORT = parseInt(process.env.PORT || '3000');
+const logBuffer = [];
+const origLog = console.log;
+const origError = console.error;
+console.log = (...args) => { logBuffer.push(args.join(' ')); if (logBuffer.length > 200) logBuffer.shift(); origLog(...args); };
+console.error = (...args) => { logBuffer.push('[ERR] ' + args.join(' ')); if (logBuffer.length > 200) logBuffer.shift(); origError(...args); };
 const OWNER_JID = process.env.OWNER_JID || null;
 const GROUP_MODE = process.env.GROUP_MODE === 'true';
 const AUTH_DIR = process.env.AUTH_DIR || './auth_info';
@@ -421,6 +426,11 @@ function requireApiKey(req, res, next) {
 
 app.get('/health', (req, res) => {
   res.json({ status: sock?.user ? 'ok' : 'connecting', bot: sock?.user?.id || null, uptime: Math.floor(process.uptime()), plugins: plugins.length });
+});
+
+app.get('/logs', (req, res) => {
+  res.set('Content-Type', 'text/plain');
+  res.send(logBuffer.join('\n'));
 });
 
 app.get('/api/poll', requireApiKey, (req, res) => {
