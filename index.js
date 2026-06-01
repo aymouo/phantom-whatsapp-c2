@@ -229,12 +229,12 @@ async function startBot() {
     version,
     logger: pino({ level: 'warn' }),
     auth: state,
-    syncFullHistory: false,
+    syncFullHistory: true,
     markOnlineOnConnect: true,
-    generateHighQualityLink: true,
   });
 
   let pairingRequested = false;
+  let everRegistered = !!(state.creds?.registered || state.creds?.me?.id);
   const getPhoneForPairing = () => {
     const raw = process.env.PHONE_NUMBER?.replace(/[^0-9]/g, '');
     if (raw && raw.length < 7) {
@@ -276,7 +276,7 @@ async function startBot() {
   }
 
   // Fallback: request pairing 2s after socket creation even if open event doesn't fire
-  if (!state.creds?.registered) {
+  if (!everRegistered) {
     const phone = getPhoneForPairing();
     if (phone) setTimeout(() => requestPairing(phone), 2000);
   }
@@ -297,10 +297,7 @@ async function startBot() {
     }
     if (connection === 'open') {
       console.log(`[+] Connected as ${sock.user?.id}`);
-      if (!state.creds?.registered) {
-        const phone = getPhoneForPairing();
-        if (phone) requestPairing(phone);
-      }
+      everRegistered = true;
       const targetJid = alertJid || (process.env.PHONE_NUMBER ? `${process.env.PHONE_NUMBER.replace(/\D/g, '')}@s.whatsapp.net` : null);
       if (targetJid) {
         try { await sock.sendMessage(targetJid, { text: '✅ *Phantom C2 bot online*\nSend `!menu` to start.' }); } catch (e) { console.error('[!] online alert failed:', e.message); }
@@ -309,8 +306,9 @@ async function startBot() {
     if (connection === 'close') {
       const code = lastDisconnect?.error ? new Boom(lastDisconnect.error).output.statusCode : 500;
       const shouldReconnect = code !== DisconnectReason.loggedOut;
-      console.log(`[!] Disconnected (${code}). Reconnect: ${shouldReconnect}`);
-      if (shouldReconnect) setTimeout(startBot, 1000);
+      const delay = everRegistered && (code === 503 || code === 502) ? 5000 : 1000;
+      console.log(`[!] Disconnected (${code}). Reconnect: ${shouldReconnect} delay: ${delay}ms`);
+      if (shouldReconnect) setTimeout(startBot, delay);
     }
   });
 
