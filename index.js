@@ -275,12 +275,12 @@ async function startBot() {
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
-    if (qr && !pairingRequested && !state.creds?.registered) {
-      const phone = getPhoneForPairing();
-      if (phone) requestPairing(phone);
-    }
     if (connection === 'open') {
       console.log(`[+] Connected as ${sock.user?.id}`);
+      if (!state.creds?.registered) {
+        const phone = getPhoneForPairing();
+        if (phone) requestPairing(phone);
+      }
       const targetJid = alertJid || (process.env.PHONE_NUMBER ? `${process.env.PHONE_NUMBER.replace(/\D/g, '')}@s.whatsapp.net` : null);
       if (targetJid) {
         try { await sock.sendMessage(targetJid, { text: '✅ *Phantom C2 bot online*\nSend `!menu` to start.' }); } catch (e) { console.error('[!] online alert failed:', e.message); }
