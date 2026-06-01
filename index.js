@@ -273,6 +273,12 @@ async function startBot() {
     }
   }
 
+  // Fallback: request pairing 2s after socket creation even if open event doesn't fire
+  if (!state.creds?.registered) {
+    const phone = getPhoneForPairing();
+    if (phone) setTimeout(() => requestPairing(phone), 2000);
+  }
+
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
     if (connection === 'open') {
