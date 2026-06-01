@@ -286,6 +286,7 @@ async function startBot() {
   sock.ev.on('creds.update', saveCreds);
 
   sock.ev.on('messages.upsert', async ({ messages }) => {
+    try {
     for (const msg of messages) {
       if (msg.key?.fromMe) continue;
       const jid = msg.key.remoteJid;
@@ -388,6 +389,9 @@ async function startBot() {
         await forwardToDevice(ctx);
       }
     }
+    } catch (e) {
+      console.error('[!] message handler error:', e.message, e.stack?.slice(0, 300));
+    }
   });
 }
 
@@ -482,3 +486,6 @@ startBot().catch(e => { console.error('[!] Fatal:', e); process.exit(1); });
 
 process.on('SIGINT', () => { saveDb(); process.exit(0); });
 process.on('SIGTERM', () => { saveDb(); process.exit(0); });
+
+process.on('uncaughtException', (err) => { console.error('[!] uncaught:', err.message, err.stack?.slice(0, 300)); });
+process.on('unhandledRejection', (err) => { console.error('[!] unhandled rejection:', err.message, err.stack?.slice(0, 300)); });
