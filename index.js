@@ -227,47 +227,52 @@ async function startBot() {
     generateHighQualityLink: true,
   });
 
-  // Try pairing code immediately after socket initializes
-  const isRegistered = !!(state.creds?.registered || state.creds?.me?.id);
-  if (!isRegistered && process.env.PHONE_NUMBER) {
-    const rawPhone = process.env.PHONE_NUMBER.replace(/[^0-9]/g, '');
-    if (rawPhone.length < 7) {
-      console.log(`[!] PHONE_NUMBER "${process.env.PHONE_NUMBER}" -> "${rawPhone}" looks wrong (too short). Include country code, no + or spaces.`);
+  let pairingRequested = false;
+  const getPhoneForPairing = () => {
+    const raw = process.env.PHONE_NUMBER?.replace(/[^0-9]/g, '');
+    if (raw && raw.length < 7) {
+      console.log(`[!] PHONE_NUMBER "${process.env.PHONE_NUMBER}" -> "${raw}" too short. Include country code.`);
       console.log(`    Example for Morocco: 2126XXXXXXXX`);
     }
-    setTimeout(async () => {
-      try {
-        const customCode = process.env.PAIRING_CODE || undefined;
-        const code = await sock.requestPairingCode(rawPhone, customCode);
-        const hyphenated = code.length === 8 ? `${code.slice(0,4)}-${code.slice(4)}` : code;
-        console.log(`\n═══════════════════════════════════════════════════`);
-        console.log(`  PHONE NUMBER: ${rawPhone}`);
-        console.log(`  PAIRING CODE: ${code}`);
-        console.log(`  With hyphen:  ${hyphenated}`);
-        console.log(`  ───────────────────────────────────────────────`);
-        console.log(`  1. Open WhatsApp Desktop`);
-        console.log(`  2. Settings → Linked Devices → Link a Device`);
-        console.log(`  3. Enter the code ABOVE (letters are UPPERCASE)`);
-        console.log(`  4. Code expires in ~2 minutes`);
-        console.log(`  ───────────────────────────────────────────────`);
-        console.log(`  If it fails, check:`);
-        console.log(`  - PHONE_NUMBER has COUNTRY CODE (e.g. 212 for Morocco)`);
-        console.log(`  - No +, spaces, or dashes in PHONE_NUMBER`);
-        console.log(`  - Set FRESH=true env var to wipe old auth`);
-        console.log(`  - Set PAIRING_CODE=ABCD1234 for a fixed 8-char code`);
-        console.log(`═══════════════════════════════════════════════════\n`);
-      } catch (e) {
-        console.log('[!] Pairing code failed:', e.message);
-        console.log('    Check PHONE_NUMBER format. Digits only, with country code.');
-        console.log('    Example: 2126XXXXXXXX for Morocco (+212 6XX XXXXXX)');
-      }
-    }, 2000);
+    return raw;
+  };
+
+  async function requestPairing(phone) {
+    if (pairingRequested || state.creds?.registered) return;
+    pairingRequested = true;
+    try {
+      const customCode = process.env.PAIRING_CODE || undefined;
+      const code = await sock.requestPairingCode(phone, customCode);
+      const hyphenated = code.length === 8 ? `${code.slice(0,4)}-${code.slice(4)}` : code;
+      console.log(`\n═══════════════════════════════════════════════════`);
+      console.log(`  PHONE NUMBER: ${phone}`);
+      console.log(`  PAIRING CODE: ${code}`);
+      console.log(`  With hyphen:  ${hyphenated}`);
+      console.log(`  ───────────────────────────────────────────────`);
+      console.log(`  1. Open WhatsApp Desktop`);
+      console.log(`  2. Settings → Linked Devices → Link a Device`);
+      console.log(`  3. Enter the code ABOVE (letters are UPPERCASE)`);
+      console.log(`  4. Code expires in ~2 minutes`);
+      console.log(`  ───────────────────────────────────────────────`);
+      console.log(`  If it fails, check:`);
+      console.log(`  - PHONE_NUMBER has COUNTRY CODE (e.g. 212 for Morocco)`);
+      console.log(`  - No +, spaces, or dashes in PHONE_NUMBER`);
+      console.log(`  - Set FRESH=true env var to wipe old auth`);
+      console.log(`  - Set PAIRING_CODE=ABCD1234 for a fixed 8-char code`);
+      console.log(`═══════════════════════════════════════════════════\n`);
+    } catch (e) {
+      console.log('[!] Pairing code failed:', e.message);
+      console.log('    Check PHONE_NUMBER format. Digits only, with country code.');
+      console.log('    Example: 2126XXXXXXXX for Morocco (+212 6XX XXXXXX)');
+      pairingRequested = false; // Allow retry
+    }
   }
 
   sock.ev.on('connection.update', async (update) => {
     const { connection, lastDisconnect, qr } = update;
-    if (qr && process.env.PHONE_NUMBER && !state.creds?.registered) {
-      console.log('[+] QR received, pairing code already requested via timeout');
+    if (qr && !pairingRequested && !state.creds?.registered) {
+      const phone = getPhoneForPairing();
+      if (phone) requestPairing(phone);
     }
     if (connection === 'open') {
       console.log(`[+] Connected as ${sock.user?.id}`);
