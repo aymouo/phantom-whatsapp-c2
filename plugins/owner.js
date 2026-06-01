@@ -50,7 +50,7 @@ export default {
         const pending = db.exec("SELECT COUNT(*) as c FROM command_queue WHERE delivered=0")[0]?.values[0]?.[0] || 0;
         const target = getTarget(jid);
         await sock.sendMessage(jid, {
-          text: `╔══════════════════════╗\n║   📊 *BOT STATUS*    ║\n╚══════════════════════╝\n\n🤖 Bot: 🟢 Online\n📱 Devices: ${count} (${online} online)\n⏳ Pending: ${pending}\n⏱ Uptime: ${Math.floor(process.uptime())}s\n🎯 Target: ${target || '📢 Broadcast'}\n━━━━━━━━━━━━━━━━━━━━━`
+          text: `╔══════════════════════╗\n║   📊 *BOT STATUS*    ║\n╚══════════════════════╝\n\n🤖 Bot: 🟢 Online\n📱 Devices: ${count} (${online} online)\n⏳ Pending: ${pending}\n⏱ Uptime: ${Math.floor(process.uptime())}s\n🎯 Target: ${target || '📢 Broadcast'}\n━━━━━━━━━━━━━━━━━━━━━\n💡 \`!auto_pwn\` — smart exploit engine\n💡 \`!menu\` — browse all commands`
         });
         break;
       }

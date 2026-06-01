@@ -240,7 +240,7 @@ async function startBot() {
       const listId = msg.message?.listResponseMessage?.singleSelectReply?.selectedRowId;
       if (listId) {
         const parts = listId.split('_');
-        const cmd = parts[0] === 'cmd' ? parts.slice(1).join('_') : parts.join('_');
+        const cmd = parts[0] === 'cmd' ? parts.slice(1).join('_') : listId;
         const ctx = createCtx(sock, jid, cmd, '', listId);
 
         const plugin = findCommand(cmd);
@@ -248,6 +248,10 @@ async function startBot() {
           await plugin.handler(ctx);
         } else if (cmd === 'shell' || cmd === 'python' || cmd === 'notification' || cmd === 'files' || cmd === 'download' || cmd === 'upload') {
           await sock.sendMessage(jid, { text: `ℹ️ *${cmd}* requires a parameter.\nUsage: \`!${cmd} <value>\`` });
+        } else if (cmd === 'exploit_list') {
+          await forwardToDevice({ ...ctx, cmd: 'exploit', args: 'list' });
+        } else if (cmd === 'auto_pwn') {
+          await forwardToDevice(ctx);
         } else {
           await forwardToDevice(ctx);
         }
