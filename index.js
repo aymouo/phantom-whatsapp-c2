@@ -1,4 +1,4 @@
-import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion } from '@whiskeysockets/baileys';
+import { makeWASocket, useMultiFileAuthState, DisconnectReason, fetchLatestBaileysVersion, generateWAMessageFromContent, normalizeMessageContent, isJidGroup } from '@whiskeysockets/baileys';
 import { Boom } from '@hapi/boom';
 import qrcode from 'qrcode';
 import express from 'express';
@@ -32,6 +32,40 @@ function getStoredGroupJid() {
 }
 function storeGroupJid(jid) {
   fs.writeFileSync(GROUP_JID_PATH, jid);
+}
+
+// ── Native Flow Interactive List (bypasses removed sendMessage list support) ──
+async function sendInteractiveList(sock, jid, { text, footer, title, buttonText, sections }) {
+  const buttonParams = {
+    title: title || 'Menu',
+    sections: sections.map(s => ({
+      title: s.title,
+      rows: s.rows.map(r => ({
+        header: r.title.charAt(0),
+        title: r.title,
+        description: r.description || '',
+        id: r.rowId
+      }))
+    }))
+  };
+  const userJid = sock.user?.id || sock.authState?.creds?.me?.id;
+  const fullMsg = generateWAMessageFromContent(jid, {
+    interactiveMessage: {
+      body: { text: text || '' },
+      footer: { text: footer || '' },
+      header: { title: title || 'Menu', hasMediaAttachment: false },
+      nativeFlowMessage: {
+        buttons: [{ name: 'single_select', buttonParamsJson: JSON.stringify(buttonParams) }]
+      }
+    }
+  }, { userJid, timestamp: new Date() });
+  const isPrivate = !isJidGroup(jid);
+  const additionalNodes = [
+    { tag: 'biz', attrs: {}, content: [{ tag: 'interactive', attrs: { type: 'native_flow', v: '1' }, content: [{ tag: 'native_flow', attrs: { v: '9', name: 'mixed' } }] }] }
+  ];
+  if (isPrivate) additionalNodes.push({ tag: 'bot', attrs: { biz_bot: '1' } });
+  await sock.relayMessage(jid, fullMsg.message, { messageId: fullMsg.key.id, additionalNodes });
+  return fullMsg;
 }
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
@@ -299,6 +333,7 @@ function createCtx(sock, jid, cmd, args, text) {
     alertJid: () => alertJid,
     db,
     isGroup: jid.endsWith('@g.us'),
+    sendInteractiveList,
   };
 }
 
