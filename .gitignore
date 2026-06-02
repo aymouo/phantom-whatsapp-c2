@@ -4,3 +4,4 @@ data/
 *.db
 targets.json
 .env
+group_jid.txt

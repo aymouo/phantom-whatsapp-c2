@@ -2,7 +2,7 @@ export default {
   name: 'menu',
   commands: ['menu', 'help', 'start'],
   handler: async (ctx) => {
-    const { sock, jid, getDevices, getTarget } = ctx;
+    const { sock, jid, groupJid, getDevices, getTarget } = ctx;
     const devices = getDevices();
     const target = getTarget(jid);
     const targetDevice = target ? devices.find(d => d.device_id === target) : null;
@@ -11,6 +11,10 @@ export default {
     const header = target
       ? `🎯 *${target}* ${status}`
       : `📢 *Broadcast Mode*`;
+
+    // In group mode, route interactive list to the group
+    const uiJid = (groupJid && !ctx.isGroup) ? groupJid : jid;
+    const isRouting = uiJid !== jid;
 
     const menuText = `╔══════════════════════════╗
 ║   🤖 *PHANTOM C2*       ║
@@ -64,9 +68,9 @@ Send any command with ! prefix`;
 
     // Try interactive list first, fall back to text
     try {
-      await sock.sendMessage(jid, {
-        text: menuText,
-        footer: 'Tap to browse',
+      await sock.sendMessage(uiJid, {
+        text: `${header}\n📶 Transport: WhatsApp\n\n📋 Tap the button below for commands`,
+        footer: 'Phantom C2 — 6-Proof Framework',
         title: '☰ COMMAND CENTER',
         buttonText: '📋 MENU',
         sections: [
@@ -129,8 +133,11 @@ Send any command with ! prefix`;
           }
         ]
       });
+      if (isRouting) {
+        await sock.sendMessage(jid, { text: '📋 *Interactive menu* sent to the Phantom C2 Ops group ✅' });
+      }
     } catch (_) {
-      // Fallback: plain text if interactive list fails
+      // Fallback: plain text if interactive list fails (always works in DM)
       await sock.sendMessage(jid, { text: menuText });
     }
   }
